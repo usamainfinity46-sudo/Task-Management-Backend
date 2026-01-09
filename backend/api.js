@@ -14,12 +14,12 @@ const app = express();
 // Configure CORS properly
 const corsOptions = {
   origin: [
-    'https://task-management-system-nine-puce.vercel.app', // Your Vercel frontend
-    'http://localhost:3000', // Local development
-    process.env.FRONTEND_URL // Environment variable
-  ].filter(Boolean), // Remove any undefined/null values
-  credentials: true, // Allow cookies/auth headers
-  exposedHeaders: ['Content-Disposition'], // Expose custom headers
+    'https://task-management-system-nine-puce.vercel.app',
+    'http://localhost:3000',
+    process.env.FRONTEND_URL
+  ].filter(Boolean),
+  credentials: true,
+  exposedHeaders: ['Content-Disposition'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: [
     'Content-Type',
@@ -27,13 +27,43 @@ const corsOptions = {
     'X-Requested-With',
     'Accept'
   ],
-  maxAge: 86400 // 24 hours
+  maxAge: 86400
 };
 
-// Middleware
+// Apply CORS
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Handle preflight
+
+// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Debug logging
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.originalUrl}`);
+    next();
+});
+
+// Test route
+app.get('/', (req, res) => {
+    res.json({
+        message: 'Task Management API',
+        endpoints: {
+            auth: '/api/auth',
+            tasks: '/api/tasks',
+            companies: '/api/companies',
+            users: '/api/users',
+            health: '/api/health'
+        }
+    });
+});
+
+app.get('/api/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        timestamp: new Date().toISOString() 
+    });
+});
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -53,9 +83,12 @@ app.use((err, req, res, next) => {
 
 // 404 handler
 app.use('*', (req, res) => {
+    console.log(`404 - Route not found: ${req.originalUrl}`);
     res.status(404).json({
         success: false,
-        message: 'API endpoint not found'
+        message: 'API endpoint not found',
+        requestedUrl: req.originalUrl,
+        availableEndpoints: ['/api/auth', '/api/tasks', '/api/companies', '/api/users']
     });
 });
 
@@ -71,6 +104,5 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV}`);
     console.log(`Allowed origins: ${corsOptions.origin.join(', ')}`);
 });
