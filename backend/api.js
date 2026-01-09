@@ -16,6 +16,7 @@ const corsOptions = {
   origin: [
     'https://task-management-system-nine-puce.vercel.app',
     'http://localhost:3000',
+    'http://localhost:5173',
     process.env.FRONTEND_URL
   ].filter(Boolean),
   credentials: true,

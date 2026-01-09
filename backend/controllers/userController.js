@@ -87,7 +87,7 @@ export const createUser = async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    // console.log(req.user.company);
+    console.log(req.user.role);
     
 
     let { name, email, password, role, company, manager, isActive } =
