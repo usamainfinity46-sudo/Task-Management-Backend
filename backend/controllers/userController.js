@@ -104,7 +104,7 @@ export const createUser = async (req, res) => {
     }
 
     // Check permissions
-    if (req.user.role !== "manager") {
+    if (req.user.role !== "manager" || req.user.role !== "admin") {
       return res
         .status(403)
         .json({ message: "Not authorized to create this user" });
