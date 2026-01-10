@@ -432,59 +432,34 @@ export const getTasks = async (req, res) => {
 // In getTask function in taskController.js
 export const getTask = async (req, res) => {
     try {
-   const { 
-            month = new Date().getMonth() + 1, 
-            year = new Date().getFullYear(),
-            userId,
-            companyId,
-            reportType = 'monthly' // Add reportType parameter
-        } = req.query;
+        const { id } = req.params; // Get task ID from URL params
 
-        // Calculate date range based on reportType
-        let startDate, endDate;
-        
-        if (reportType === 'quarterly') {
-            const quarter = Math.ceil(month / 3);
-            startDate = new Date(year, (quarter - 1) * 3, 1);
-            endDate = new Date(year, quarter * 3, 0);
-        } else if (reportType === 'yearly') {
-            startDate = new Date(year, 0, 1);
-            endDate = new Date(year, 11, 31);
-        } else {
-            // Monthly (default)
-            startDate = new Date(year, month - 1, 1);
-            endDate = new Date(year, month, 0);
-        }
-
-        let query = {
-            startDate: { $lte: endDate },
-            endDate: { $gte: startDate }
-        };
-
-        // Apply filters
-        if (userId) query.assignedTo = userId;
-        if (companyId) query.company = companyId;
-        
-        // Apply role-based filtering
-        if (req.user.role === 'staff') {
-            query.assignedTo = req.user.id;
-        } else if (req.user.role === 'manager') {
-            query.company = req.user.company;
-        }
-
-        const tasks = await Task.find(query)
+        const task = await Task.findById(id)
             .populate('assignedTo', 'name email role')
             .populate('assignedBy', 'name email')
-            .populate('company', 'name')
-            .sort({ createdAt: -1 });
+            .populate('company', 'name');
 
-        if (!tasks) {
-            return res.status(404).json({ message: 'Task not found' });
+        if (!task) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Task not found' 
+            });
         }
 
         // Check permission
         if (req.user.role === 'staff' && task.assignedTo._id.toString() !== req.user.id) {
-            return res.status(403).json({ message: 'Not authorized to view this task' });
+            return res.status(403).json({ 
+                success: false,
+                message: 'Not authorized to view this task' 
+            });
+        }
+
+        // Manager can only see tasks from their company
+        if (req.user.role === 'manager' && task.company._id.toString() !== req.user.company.toString()) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Not authorized to view this task' 
+            });
         }
 
         res.json({
@@ -492,7 +467,11 @@ export const getTask = async (req, res) => {
             task
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('Error in getTask:', error);
+        res.status(500).json({ 
+            success: false,
+            message: error.message 
+        });
     }
 };
 
