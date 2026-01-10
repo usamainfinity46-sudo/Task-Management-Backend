@@ -65,24 +65,28 @@ export const createTask = async (req, res) => {
                 remarks: ''
             }));
         } else {
-            // Generate default daily subtasks
+            // Generate default daily subtasks - EXCLUDING SUNDAYS
             const start = new Date(startDate);
             const end = new Date(endDate);
             
-            // Calculate total days
-            const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+            let dayCounter = 1;
+            let currentDate = new Date(start);
             
-            for (let i = 0; i < totalDays; i++) {
-                const currentDate = new Date(start);
-                currentDate.setDate(start.getDate() + i);
+            while (currentDate <= end) {
+                // Check if it's NOT Sunday (0 = Sunday, 1 = Monday, ..., 6 = Saturday)
+                if (currentDate.getDay() !== 0) {
+                    subTasks.push({
+                        date: new Date(currentDate),
+                        description: `${title} - Day ${dayCounter}`,
+                        status: 'pending',
+                        hoursSpent: 0,
+                        remarks: ''
+                    });
+                    dayCounter++;
+                }
                 
-                subTasks.push({
-                    date: new Date(currentDate),
-                    description: `${title} - Day ${i + 1}`,
-                    status: 'pending',
-                    hoursSpent: 0,
-                    remarks: ''
-                });
+                // Move to next day
+                currentDate.setDate(currentDate.getDate() + 1);
             }
         }
 
@@ -399,7 +403,8 @@ export const getTask = async (req, res) => {
             .populate('assignedBy', 'name email')
             .populate('company', 'name')
             .sort({ createdAt: -1 });
-        if (!task) {
+
+        if (!tasks) {
             return res.status(404).json({ message: 'Task not found' });
         }
 
@@ -735,9 +740,6 @@ export const deleteTask = async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to delete tasks' });
         }
 
-        if (req.user.role === 'manager' && task.company.toString() !== req.user.company) {
-            return res.status(403).json({ message: 'Not authorized to delete this task' });
-        }
 
         await Task.findByIdAndDelete(req.params.id);
 

@@ -39,8 +39,8 @@ router.get('/dashboard/stats', getDashboardStats);
 // THEN parameterized routes
 router.get('/', getTasks);
 router.get('/:id', getTask);    // Now this won't catch '/reports'
-router.put('/:id', authorize(['admin', 'manager']), updateTask);
-router.delete('/:id', authorize(['admin', 'manager']), deleteTask);
+router.put('/:id', updateTask);
+router.delete('/:id', deleteTask);
 
 // Subtask routes
 router.post('/:taskId/subtasks', protect, addSubTask);

@@ -20,7 +20,7 @@ router.post('/', [
     check('email', 'Please include a valid email').optional().isEmail()
 ], authorize(['admin']), createCompany);
 
-router.get('/', authorize(['admin']), getCompanies);
+router.get('/', authorize(['admin', 'manager' ]), getCompanies);
 router.get('/:id', authorize(['admin']), getCompany);
 router.put('/:id', authorize(['admin']), updateCompany);
 router.delete('/:id', authorize(['admin']), deleteCompany);
