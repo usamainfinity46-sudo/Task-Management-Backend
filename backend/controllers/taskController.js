@@ -27,10 +27,25 @@ export const createTask = async (req, res) => {
         } = req.body;
 
         // Validate assigned user exists
+        // Validate assigned user exists
         const user = await User.findById(assignedTo);
         if (!user) {
             return res.status(404).json({ message: 'Assigned user not found' });
         }
+
+        // If admin, assign the user's company to task
+        let taskCompany = company;
+        if (req.user.role === 'admin') {
+            if (!user.company) {
+                return res.status(400).json({ message: 'Assigned user does not belong to a company' });
+            }
+            taskCompany = user.company;
+        } else if (!taskCompany) {
+            // For non-admin, fallback to req.user.company
+            taskCompany = req.user.company;
+        }
+
+        
 
         // Validate company exists
         if (company) {
@@ -44,7 +59,7 @@ export const createTask = async (req, res) => {
         const task = await Task.create({
             title,
             description,
-            company: company || req.user.company,
+            company: taskCompany,
             assignedTo,
             assignedBy: req.user.id,
             startDate: new Date(startDate),
@@ -108,6 +123,65 @@ export const createTask = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+
+// ✅ UPDATE TASK (Provided earlier)
+export const updateTask = async (req, res) => {
+    try {
+        const { title, description, assignedTo, startDate, endDate, priority, status } = req.body;
+
+        let task = await Task.findById(req.params.id);
+        if (!task) {
+            return res.status(404).json({ message: 'Task not found' });
+        }
+
+        // Check permission
+        if (req.user.role === 'staff' && task.assignedTo.toString() !== req.user.id) {
+            return res.status(403).json({ message: 'Not authorized to update this task' });
+        }
+
+        // If assignedTo changed, get the user and company
+        let taskCompany = task.company;
+        if (assignedTo) {
+            const user = await User.findById(assignedTo);
+            if (!user) return res.status(404).json({ message: 'Assigned user not found' });
+
+            if (req.user.role === 'admin') {
+                if (!user.company) {
+                    return res.status(400).json({ message: 'Assigned user does not belong to a company' });
+                }
+                taskCompany = user.company;
+            }
+        }
+
+
+        task = await Task.findByIdAndUpdate(
+            req.params.id,
+            {
+                title,
+                description,
+                assignedTo,
+                startDate,
+                endDate,
+                priority,
+                company: taskCompany,
+                status,
+                updatedAt: Date.now()
+            },
+            { new: true, runValidators: true }
+        ).populate('assignedTo', 'name email')
+         .populate('assignedBy', 'name email')
+         .populate('company', 'name');
+
+        res.json({
+            success: true,
+            task
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 
 // ✅ ADD SUBTASK TO EXISTING TASK (NEW FUNCTION)
 export const addSubTask = async (req, res) => {
@@ -686,46 +760,7 @@ export const getReport = async (req, res) => {
     }
 };
 
-// ✅ UPDATE TASK (Provided earlier)
-export const updateTask = async (req, res) => {
-    try {
-        const { title, description, assignedTo, startDate, endDate, priority, status } = req.body;
 
-        let task = await Task.findById(req.params.id);
-        if (!task) {
-            return res.status(404).json({ message: 'Task not found' });
-        }
-
-        // Check permission
-        if (req.user.role === 'staff' && task.assignedTo.toString() !== req.user.id) {
-            return res.status(403).json({ message: 'Not authorized to update this task' });
-        }
-
-        task = await Task.findByIdAndUpdate(
-            req.params.id,
-            {
-                title,
-                description,
-                assignedTo,
-                startDate,
-                endDate,
-                priority,
-                status,
-                updatedAt: Date.now()
-            },
-            { new: true, runValidators: true }
-        ).populate('assignedTo', 'name email')
-         .populate('assignedBy', 'name email')
-         .populate('company', 'name');
-
-        res.json({
-            success: true,
-            task
-        });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
 
 // ✅ DELETE TASK (Provided earlier)
 export const deleteTask = async (req, res) => {
