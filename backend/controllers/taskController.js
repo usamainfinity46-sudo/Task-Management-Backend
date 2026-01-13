@@ -241,7 +241,7 @@ export const addSubTaskDay = async (req, res) => {
       description,
       hoursSpent: hoursSpent || 0,
       remarks: remarks || '',
-      status: status || 'pending'
+      status: status || 'in-progress'
     });
 
     await task.save();
@@ -265,46 +265,45 @@ export const deleteSubtask = async (req, res) => {
     try {
         const { taskId, subTaskId } = req.params;
 
+        if (!req.user) return res.status(401).json({ message: 'Not authorized' });
+
         const task = await Task.findById(taskId);
-        if (!task) {
-            return res.status(404).json({ message: 'Task not found' });
+        if (!task) return res.status(404).json({ message: 'Task not found' });
+
+        // // Permission check
+        // if (req.user.role === 'manager' && task.assignedTo.toString() !== req.user._id.toString()) {
+        //     return res.status(403).json({ message: 'Not authorized to delete this task' });
+        // }
+
+        let removed = false;
+
+        for (let day of task.days) {
+            const originalLength = day.subTasks.length;
+            day.subTasks = day.subTasks.filter(st => st._id.toString() !== subTaskId);
+            if (day.subTasks.length !== originalLength) {
+                removed = true;
+                break; // Subtask removed, no need to continue
+            }
         }
 
-        // Check permission
-        if (req.user.role === 'staff' && task.assignedTo.toString() !== req.user.id) {
-            return res.status(403).json({ message: 'Not authorized to delete subtasks from this task' });
-        }
+        if (!removed) return res.status(404).json({ message: 'Subtask not found' });
 
-        // Remove subtask
-        task.subTasks = task.subTasks.filter(subTask => subTask._id.toString() !== subTaskId);
-        
-        // Recalculate progress
-        const completedSubTasks = task.subTasks.filter(st => st.status === 'completed').length;
-        task.progress = task.subTasks.length > 0 
-            ? Math.round((completedSubTasks / task.subTasks.length) * 100)
-            : 0;
-        
-        // Update overall task status
-        if (task.progress === 100) {
-            task.status = 'completed';
-        } else if (task.progress > 0 && task.status === 'pending') {
-            task.status = 'in-progress';
-        }
+        // Recalculate task progress
+        const allSubTasks = task.days.flatMap(day => day.subTasks);
+        const completedCount = allSubTasks.filter(st => st.status === 'completed').length;
+        task.progress = allSubTasks.length ? Math.round((completedCount / allSubTasks.length) * 100) : 0;
+        task.status = task.progress === 100 ? 'completed' : task.progress > 0 ? 'in-progress' : 'pending';
 
         await task.save();
 
-        res.json({
-            success: true,
-            message: 'Subtask deleted successfully',
-            task: await Task.findById(taskId)
-                .populate('assignedTo', 'name email')
-                .populate('assignedBy', 'name email')
-                .populate('company', 'name')
-        });
+        res.json({ success: true, message: 'Subtask deleted successfully', task });
     } catch (error) {
+        console.error('DELETE SUBTASK ERROR:', error);
         res.status(500).json({ message: error.message });
     }
 };
+
+
 
 // ✅ FIXED GET SUBTASK REPORT - Works with days[] structure
 export const getSubTaskReport = async (req, res) => {
@@ -539,62 +538,93 @@ export const getTask = async (req, res) => {
 };
 
 // ✅ UPDATE SUBTASK (Missing Function)
+// controllers/taskController.js
 export const updateSubTask = async (req, res) => {
     try {
         const { taskId, subTaskId } = req.params;
-        const { status, hoursSpent, remarks } = req.body;
+        const { status, hoursSpent, remarks, description } = req.body;
+
+        if (!req.user) return res.status(401).json({ message: 'Not authorized' });
 
         const task = await Task.findById(taskId);
+        if (!task) return res.status(404).json({ message: 'Task not found' });
+
+        // Permission check
+        if (req.user.role === 'staff' && task.assignedTo.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Not authorized to update this task' });
+        }
+
+        // Find subtask in days
+        let subTaskFound = null;
+        for (let day of task.days) {
+            const subTask = day.subTasks.id(subTaskId);
+            if (subTask) {
+                subTaskFound = subTask;
+                break;
+            }
+        }
+
+        if (!subTaskFound) return res.status(404).json({ message: 'Subtask not found' });
+
+        // Update fields
+        subTaskFound.description = description || subTaskFound.description;
+        subTaskFound.status = status || subTaskFound.status;
+        subTaskFound.hoursSpent = hoursSpent ?? subTaskFound.hoursSpent;
+        subTaskFound.remarks = remarks ?? subTaskFound.remarks;
+
+        if (status === 'completed' && subTaskFound.status !== 'completed') {
+            subTaskFound.completedAt = new Date();
+        }
+
+        // Recalculate task progress
+        const allSubTasks = task.days.flatMap(day => day.subTasks);
+        const completedCount = allSubTasks.filter(st => st.status === 'completed').length;
+        task.progress = Math.round((completedCount / allSubTasks.length) * 100);
+
+        // Update task status
+        if (task.progress === 100) task.status = 'completed';
+        else if (task.progress > 0) task.status = 'in-progress';
+        else task.status = 'pending';
+
+        await task.save();
+
+        const updatedTask = await Task.findById(taskId)
+            .populate('assignedTo', 'name email')
+            .populate('assignedBy', 'name email')
+            .populate('company', 'name');
+
+        res.json({ success: true, task: updatedTask });
+    } catch (error) {
+        console.error('UPDATE SUBTASK ERROR:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+
+// ✅ DELETE TASK (Provided earlier)
+export const deleteTask = async (req, res) => {
+    try {
+        const task = await Task.findById(req.params.id);
         if (!task) {
             return res.status(404).json({ message: 'Task not found' });
         }
 
         // Check permission
-        if (req.user.role === 'staff' && task.assignedTo.toString() !== req.user.id) {
-            return res.status(403).json({ message: 'Not authorized to update this task' });
+        if (req.user.role === 'staff') {
+            return res.status(403).json({ message: 'Not authorized to delete tasks' });
         }
 
-        const subTask = task.subTasks.id(subTaskId);
-        if (!subTask) {
-            return res.status(404).json({ message: 'Subtask not found' });
-        }
 
-        // Update subtask fields
-        subTask.status = status || subTask.status;
-        subTask.hoursSpent = hoursSpent || subTask.hoursSpent;
-        subTask.remarks = remarks || subTask.remarks;
-        subTask.updatedAt = Date.now();
-
-        // Mark as completed with timestamp
-        if (status === 'completed' && subTask.status !== 'completed') {
-            subTask.completedAt = new Date();
-        }
-
-        // Recalculate overall task progress
-        const completedSubTasks = task.subTasks.filter(st => st.status === 'completed').length;
-        task.progress = Math.round((completedSubTasks / task.subTasks.length) * 100);
-
-        // Update overall task status
-        if (task.progress === 100) {
-            task.status = 'completed';
-        } else if (task.progress > 0 && task.status === 'pending') {
-            task.status = 'in-progress';
-        }
-
-        await task.save();
+        await Task.findByIdAndDelete(req.params.id);
 
         res.json({
             success: true,
-            task: await Task.findById(taskId)
-                .populate('assignedTo', 'name email')
-                .populate('assignedBy', 'name email')
-                .populate('company', 'name')
+            message: 'Task deleted successfully'
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
-
 // ✅ GET DASHBOARD STATS (Provided earlier)
 export const getDashboardStats = async (req, res) => {
     try {
@@ -677,8 +707,6 @@ export const getDashboardStats = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-
-// ✅ GET REPORT (Provided earlier)
 // ✅ FIXED GET REPORT - Works with days[] structure
 // ✅ FIXED GET REPORT - Works with days[] structure AND includes complete tree
 export const getReport = async (req, res) => {
@@ -990,27 +1018,3 @@ export const exportToExcel = async (req, res) => {
     }
 };
 
-// ✅ DELETE TASK (Provided earlier)
-export const deleteTask = async (req, res) => {
-    try {
-        const task = await Task.findById(req.params.id);
-        if (!task) {
-            return res.status(404).json({ message: 'Task not found' });
-        }
-
-        // Check permission
-        if (req.user.role === 'staff') {
-            return res.status(403).json({ message: 'Not authorized to delete tasks' });
-        }
-
-
-        await Task.findByIdAndDelete(req.params.id);
-
-        res.json({
-            success: true,
-            message: 'Task deleted successfully'
-        });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};

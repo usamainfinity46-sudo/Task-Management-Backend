@@ -96,7 +96,7 @@ export const createUser = async (req, res) => {
     password = password || "123456";
 
     // Only admin or manager allowed
-    if (req.user.role !== "admin" && req.user.role !== "manager") {
+    if (req.user.role !== "admin" &&  req.user.role !== "manager"  && req.user.role !== "sub-admin") {
       return res.status(403).json({ message: "Not authorized" });
     }
 

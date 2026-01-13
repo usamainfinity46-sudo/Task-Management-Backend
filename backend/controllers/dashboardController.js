@@ -12,112 +12,139 @@ export const getDashboardStats = async (req, res) => {
   try {
     const userId = req.user._id;
     const userRole = req.user.role;
-    
-    let query = {};
-    
-    // For non-admin users, filter by company
+
+    // ===============================
+    // STAFF: ONLY THEIR TASKS
+    // ADMIN: ALL TASKS
+    // ===============================
+    let taskQuery = {};
+
     if (userRole !== 'admin') {
-      query.company = req.user.company;
+      taskQuery = {
+        $or: [
+          { assignedTo: userId },
+          { 'subtasks.assignedTo': userId }
+        ]
+      };
     }
-    
-    // Get total tasks count
-    const totalTasks = await Task.countDocuments(query);
-    
-    // Get completed tasks count
+
+    // ===============================
+    // TASK COUNTS (DIRECT TASKS ONLY)
+    // ===============================
+    const totalTasks = await Task.countDocuments(
+      userRole === 'admin' ? {} : { assignedTo: userId }
+    );
+
     const completedTasks = await Task.countDocuments({
-      ...query,
+      ...(userRole === 'admin' ? {} : { assignedTo: userId }),
       status: 'completed'
     });
-    
-    // Get pending tasks count
+
     const pendingTasks = await Task.countDocuments({
-      ...query,
+      ...(userRole === 'admin' ? {} : { assignedTo: userId }),
       status: 'pending'
     });
-    
-    // Get in-progress tasks count
+
     const inProgressTasks = await Task.countDocuments({
-      ...query,
+      ...(userRole === 'admin' ? {} : { assignedTo: userId }),
       status: 'in-progress'
     });
-    
-    // Get delayed tasks count
+
     const delayedTasks = await Task.countDocuments({
-      ...query,
+      ...(userRole === 'admin' ? {} : { assignedTo: userId }),
       status: 'delayed'
     });
-    
-    // Get team members count
-    let teamMembers = 0;
-    if (userRole === 'admin') {
-      teamMembers = await User.countDocuments({ isActive: true });
-    } else {
-      teamMembers = await User.countDocuments({ 
-        company: req.user.company,
-        isActive: true 
+
+    // ===============================
+    // SUBTASK COUNTS (STAFF ONLY)
+    // ===============================
+    let subtaskStats = {
+      total: 0,
+      completed: 0,
+      pending: 0,
+      inProgress: 0,
+      delayed: 0
+    };
+
+    if (userRole !== 'admin') {
+      const subTaskAggregation = await Task.aggregate([
+        { $unwind: '$subtasks' },
+        {
+          $match: {
+            'subtasks.assignedTo': userId
+          }
+        },
+        {
+          $group: {
+            _id: '$subtasks.status',
+            count: { $sum: 1 }
+          }
+        }
+      ]);
+
+      subTaskAggregation.forEach(item => {
+        subtaskStats.total += item.count;
+
+        if (item._id === 'completed') subtaskStats.completed = item.count;
+        if (item._id === 'pending') subtaskStats.pending = item.count;
+        if (item._id === 'in-progress') subtaskStats.inProgress = item.count;
+        if (item._id === 'delayed') subtaskStats.delayed = item.count;
       });
     }
-    
-    // Get companies count (only for admin)
-    const activeCompanies = userRole === 'admin' 
-      ? await Company.countDocuments({ isActive: true })
-      : 1;
-    
-    // Calculate productivity (percentage of completed tasks)
-    const productivity = totalTasks > 0 
-      ? Math.round((completedTasks / totalTasks) * 100)
-      : 0;
-    
-    // Get recent activities
-    const recentActivities = await getRecentActivities(userId, userRole, query);
-    
-    // Get chart data for the last 7 days
-    const chartData = await getChartData(query);
-    
-    // Get tasks assigned to current user (for staff/manager)
-    let myTasks = [];
-    if (userRole !== 'admin') {
-      myTasks = await Task.find({ assignedTo: userId })
-        .populate('assignedBy', 'name')
-        .populate('company', 'name')
-        .sort({ createdAt: -1 })
-        .limit(5);
-    }
-    
-    // Get recent tasks
-    const recentTasks = await Task.find(query)
+
+    // ===============================
+    // RECENT TASKS + FILTER SUBTASKS
+    // ===============================
+    const recentTasks = await Task.find(taskQuery)
       .populate('assignedTo', 'name email')
       .populate('assignedBy', 'name')
       .populate('company', 'name')
       .sort({ createdAt: -1 })
-      .limit(10);
-    
+      .limit(10)
+      .lean();
+
+    // Show ONLY subtasks assigned to staff
+    if (userRole !== 'admin') {
+      recentTasks.forEach(task => {
+        task.subtasks = (task.subtasks || []).filter(
+          st => st.assignedTo?.toString() === userId.toString()
+        );
+      });
+    }
+
+    // ===============================
+    // PRODUCTIVITY
+    // ===============================
+    const totalWork = totalTasks + subtaskStats.total;
+    const completedWork = completedTasks + subtaskStats.completed;
+
+    const productivity = totalWork > 0
+      ? Math.round((completedWork / totalWork) * 100)
+      : 0;
+
+    // ===============================
+    // RESPONSE
+    // ===============================
     res.json({
       success: true,
       data: {
-        totalTasks,
-        completedTasks,
-        pendingTasks,
-        inProgressTasks,
-        delayedTasks,
-        teamMembers,
-        activeCompanies,
-        productivity,
-        chartData,
-        recentActivities,
-        recentTasks,
-        myTasks,
-        summary: {
+        tasks: {
           total: totalTasks,
           completed: completedTasks,
           pending: pendingTasks,
           inProgress: inProgressTasks,
-          delayed: delayedTasks,
-          completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
-        }
+          delayed: delayedTasks
+        },
+        subtasks: subtaskStats,
+        summary: {
+          totalWork,
+          completedWork,
+          productivity
+        },
+        recentTasks
       }
     });
-    
+
   } catch (error) {
     console.error('Dashboard stats error:', error);
     res.status(500).json({

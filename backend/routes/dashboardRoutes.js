@@ -13,7 +13,7 @@ const router = express.Router();
 router.use(protect);
 
 // Main dashboard stats (role-based)
-router.get('/stats', getDashboardStats);
+router.get('/stats', protect , getDashboardStats);
 
 // User-specific dashboard
 router.get('/user', getUserDashboard);

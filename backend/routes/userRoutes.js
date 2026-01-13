@@ -18,14 +18,15 @@ router.use(protect);
 router.post('/', [
     check('name', 'Name is required').not().isEmpty(),
     check('email', 'Please include a valid email').isEmail(),
-    check('role', 'Role is required').not().isEmpty()
+    check('role', 'Role is required').not().isEmpty(),
+    protect,
 ], authorize(['admin', 'manager']), createUser);
 
 
 // Profile routes (accessible to all authenticated users)
 router.put('/profile', [
     check('name', 'Name is required').optional().not().isEmpty(),
-    check('email', 'Please include a valid email').optional().isEmail()
+    check('email', 'Please include a valid email').optional().isEmail(), authorize(['admin', 'manager'])
 ], updateProfile);
 
 router.put('/change-password', [
@@ -34,7 +35,7 @@ router.put('/change-password', [
 ], changePassword);
 
 // User management routes
-router.get('/', authorize(['admin', 'manager']), getUsers);
+router.get('/', protect, getUsers);
 router.get('/:id', authorize(['admin', 'manager']), getUser);
 
 
