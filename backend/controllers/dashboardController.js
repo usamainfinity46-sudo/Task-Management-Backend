@@ -8,21 +8,27 @@ import Company from '../models/Company.js';
  * @route   GET /api/dashboard/stats
  * @access  Private
  */
+
+
 export const getDashboardStats = async (req, res) => {
   try {
     const userId = req.user._id;
     const userRole = req.user.role;
 
     // ===============================
-    // RECENT TASKS: USER SPECIFIC
+    // STAFF: ONLY THEIR TASKS
+    // ADMIN: ALL TASKS
     // ===============================
-    const taskQuery = {
-      $or: [
-        { assignedTo: userId },
-        { 'subtasks.assignedTo': userId },
-        { assignedBy: userId }
-      ]
-    };
+    let taskQuery = {};
+
+    if (userRole !== 'admin') {
+      taskQuery = {
+        $or: [
+          { assignedTo: userId },
+          { 'days.subTasks.assignedTo': userId }
+        ]
+      };
+    }
 
     // ===============================
     // TASK COUNTS (DIRECT TASKS ONLY)
@@ -52,7 +58,7 @@ export const getDashboardStats = async (req, res) => {
     });
 
     // ===============================
-    // SUBTASK COUNTS (STAFF ONLY)
+    // SUBTASK COUNTS (FOR TASKS ASSIGNED TO USER)
     // ===============================
     let subtaskStats = {
       total: 0,
@@ -63,30 +69,158 @@ export const getDashboardStats = async (req, res) => {
     };
 
     if (userRole !== 'admin') {
+      // Get subtasks from tasks where the user is the main assignee
       const subTaskAggregation = await Task.aggregate([
-        { $unwind: '$subtasks' },
-        {
-          $match: {
-            'subtasks.assignedTo': userId
-          }
-        },
+        // Only get tasks assigned to this user
+        { $match: { assignedTo: userId } },
+        { $unwind: '$days' },
+        { $unwind: '$days.subTasks' },
         {
           $group: {
-            _id: '$subtasks.status',
+            _id: '$days.subTasks.status',
             count: { $sum: 1 }
           }
         }
       ]);
 
-      subTaskAggregation.forEach(item => {
-        subtaskStats.total += item.count;
+      // Initialize all counts to 0
+      subtaskStats = {
+        total: 0,
+        completed: 0,
+        pending: 0,
+        inProgress: 0,
+        delayed: 0
+      };
 
+      // Sum up all subtask counts
+      subTaskAggregation.forEach(item => {
         if (item._id === 'completed') subtaskStats.completed = item.count;
-        if (item._id === 'pending') subtaskStats.pending = item.count;
-        if (item._id === 'in-progress') subtaskStats.inProgress = item.count;
-        if (item._id === 'delayed') subtaskStats.delayed = item.count;
+        else if (item._id === 'pending') subtaskStats.pending = item.count;
+        else if (item._id === 'in-progress') subtaskStats.inProgress = item.count;
+        else if (item._id === 'delayed') subtaskStats.delayed = item.count;
+        
+        subtaskStats.total += item.count;
+      });
+    } else {
+      // For admin: get subtasks from ALL tasks
+      const subTaskAggregation = await Task.aggregate([
+        { $unwind: '$days' },
+        { $unwind: '$days.subTasks' },
+        {
+          $group: {
+            _id: '$days.subTasks.status',
+            count: { $sum: 1 }
+          }
+        }
+      ]);
+
+      // Initialize all counts to 0
+      subtaskStats = {
+        total: 0,
+        completed: 0,
+        pending: 0,
+        inProgress: 0,
+        delayed: 0
+      };
+
+      // Sum up all subtask counts
+      subTaskAggregation.forEach(item => {
+        if (item._id === 'completed') subtaskStats.completed = item.count;
+        else if (item._id === 'pending') subtaskStats.pending = item.count;
+        else if (item._id === 'in-progress') subtaskStats.inProgress = item.count;
+        else if (item._id === 'delayed') subtaskStats.delayed = item.count;
+        
+        subtaskStats.total += item.count;
       });
     }
+
+    // ===============================
+    // CHART DATA (LAST 7 DAYS)
+    // ===============================
+    const days = [];
+    const today = new Date();
+
+    // Initialize last 7 days with 0 counts
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      days.push({
+        date: date,
+        name: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        dateStr: date.toISOString().split('T')[0],
+        completed: 0,
+        pending: 0,
+        inProgress: 0,
+        delayed: 0
+      });
+    }
+
+    const last7DaysDate = new Date(today);
+    last7DaysDate.setDate(last7DaysDate.getDate() - 7);
+
+    // Build base query for user's tasks
+    let chartTaskQuery = {};
+    if (userRole !== 'admin') {
+      chartTaskQuery = {
+        $or: [
+          { assignedTo: userId },
+          { 'days.subTasks.assignedTo': userId }
+        ]
+      };
+    }
+
+    // Fetch tasks updated in the last 7 days
+    const weeklyTasks = await Task.find({
+      ...chartTaskQuery,
+      updatedAt: { $gte: last7DaysDate }
+    }).lean();
+
+    // Populate counts for chart data
+    weeklyTasks.forEach(task => {
+      const taskDate = new Date(task.updatedAt).toISOString().split('T')[0];
+      const dayStat = days.find(d => d.dateStr === taskDate);
+
+      if (dayStat) {
+        // Count main task
+        if (task.status === 'completed') dayStat.completed++;
+        else if (task.status === 'pending') dayStat.pending++;
+        else if (task.status === 'in-progress') dayStat.inProgress++;
+        else if (task.status === 'delayed') dayStat.delayed++;
+      }
+
+      // Also count subtasks if they belong to this user
+      if (task.days) {
+        task.days.forEach(day => {
+          if (day.subTasks) {
+            day.subTasks.forEach(subtask => {
+              // Only count subtasks assigned to this user (or all for admin)
+              if (userRole === 'admin' || subtask.assignedTo?.toString() === userId.toString()) {
+                const subtaskDate = new Date(subtask.updatedAt || subtask.createdAt || task.updatedAt)
+                  .toISOString()
+                  .split('T')[0];
+                const subtaskDayStat = days.find(d => d.dateStr === subtaskDate);
+                
+                if (subtaskDayStat) {
+                  if (subtask.status === 'completed') subtaskDayStat.completed++;
+                  else if (subtask.status === 'pending') subtaskDayStat.pending++;
+                  else if (subtask.status === 'in-progress') subtaskDayStat.inProgress++;
+                  else if (subtask.status === 'delayed') subtaskDayStat.delayed++;
+                }
+              }
+            });
+          }
+        });
+      }
+    });
+
+    // Format chart data for frontend (just what the chart needs)
+    const chartData = days.map(({ name, completed, pending, inProgress, delayed }) => ({
+      name,
+      completed,
+      pending,
+      inProgress,
+      delayed
+    }));
 
     // ===============================
     // RECENT TASKS + FILTER SUBTASKS
@@ -99,14 +233,25 @@ export const getDashboardStats = async (req, res) => {
       .limit(10)
       .lean();
 
-    // Show ONLY subtasks assigned to staff
-    if (userRole !== 'admin') {
-      recentTasks.forEach(task => {
-        task.subtasks = (task.subtasks || []).filter(
-          st => st.assignedTo?.toString() === userId.toString()
-        );
-      });
-    }
+    // Filter recent tasks to only show subtasks assigned to this user
+    const filteredRecentTasks = recentTasks.map(task => {
+      const taskObj = { ...task };
+      
+      // If staff user, filter subtasks to show only those assigned to them
+      if (userRole !== 'admin' && taskObj.days) {
+        taskObj.days = taskObj.days.map(day => {
+          if (day.subTasks) {
+            // Filter subtasks to only show those assigned to this user
+            day.subTasks = day.subTasks.filter(
+              subtask => subtask.assignedTo?.toString() === userId.toString()
+            );
+          }
+          return day;
+        }).filter(day => day.subTasks && day.subTasks.length > 0);
+      }
+      
+      return taskObj;
+    });
 
     // ===============================
     // PRODUCTIVITY
@@ -137,7 +282,8 @@ export const getDashboardStats = async (req, res) => {
           completedWork,
           productivity
         },
-        recentTasks
+        chartData, // <-- Added chartData here
+        recentTasks: filteredRecentTasks
       }
     });
 
@@ -151,8 +297,9 @@ export const getDashboardStats = async (req, res) => {
   }
 };
 
+
 /**
- * @desc    Get user-specific dashboard
+ * @desc    Get user-specific dashboard with comprehensive activity tracking
  * @route   GET /api/dashboard/user
  * @access  Private
  */
@@ -176,13 +323,15 @@ export const getUserDashboard = async (req, res) => {
       delayed: userTasks.filter(t => t.status === 'delayed').length
     };
 
-    // Calculate user productivity
+    // Calculate user productivity - FIXED for days.subTasks structure
     const completedSubTasks = userTasks.reduce((acc, task) => {
-      return acc + (task.subTasks?.filter(st => st.status === 'completed').length || 0);
+      const taskSubtasks = (task.days || []).flatMap(day => day.subTasks || []);
+      return acc + taskSubtasks.filter(st => st.status === 'completed').length;
     }, 0);
 
     const totalSubTasks = userTasks.reduce((acc, task) => {
-      return acc + (task.subTasks?.length || 0);
+      const taskSubtasks = (task.days || []).flatMap(day => day.subTasks || []);
+      return acc + taskSubtasks.length;
     }, 0);
 
     const productivity = totalSubTasks > 0
@@ -202,71 +351,295 @@ export const getUserDashboard = async (req, res) => {
       .sort({ endDate: 1 })
       .limit(5);
 
-    // Get recent activity for user (tasks assigned to OR by the user)
-    console.log('Fetching recent activity for user:', userId);
+    // ===============================
+    // COMPREHENSIVE RECENT ACTIVITY
+    // ===============================
+    const recentActivity = [];
 
-    const recentTasks = await Task.find({
-      $or: [
-        { assignedTo: userId },
-        { assignedBy: userId }
-      ]
+    // 1. Tasks assigned TO the user
+    const tasksAssignedToUser = await Task.find({
+      assignedTo: userId
+    })
+      .populate('assignedBy', 'name')
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+
+    tasksAssignedToUser.forEach(task => {
+      const assignerName = task.assignedBy ? task.assignedBy.name : 'Someone';
+      recentActivity.push({
+        type: 'task_assigned',
+        description: `${assignerName} assigned task: ${task.title}`,
+        task: task.title,
+        status: task.status,
+        progress: task.progress,
+        timestamp: task.createdAt
+      });
+    });
+
+    // 2. Tasks assigned BY the user (if they can assign tasks)
+    const tasksAssignedByUser = await Task.find({
+      assignedBy: userId
     })
       .populate('assignedTo', 'name')
-      .populate('assignedBy', 'name')
-      .sort({ updatedAt: -1 })
-      .limit(10);
-
-    console.log('Recent tasks found:', recentTasks.length);
-
-    // Get recent users created/managed by this user
-    const recentUsers = await User.find({
-      manager: userId
-    })
       .sort({ createdAt: -1 })
-      .limit(10);
+      .limit(20)
+      .lean();
 
-    const taskActivities = recentTasks.map(task => {
-      let type = 'task_updated';
-      if (task.status === 'completed') type = 'task_completed';
-      else if (task.status === 'pending') type = 'task_created';
-      else if (task.status === 'delayed') type = 'task_delayed';
+    tasksAssignedByUser.forEach(task => {
+      const assigneeName = task.assignedTo ? task.assignedTo.name : 'Someone';
+      recentActivity.push({
+        type: 'task_created',
+        description: `You assigned task: ${task.title} to ${assigneeName}`,
+        task: task.title,
+        status: task.status,
+        progress: task.progress,
+        timestamp: task.createdAt
+      });
+    });
 
+    // 3. Task updates where user is involved
+    const updatedTasks = await Task.aggregate([
+      {
+        $match: {
+          $or: [
+            { assignedTo: userId },
+            { assignedBy: userId }
+          ],
+          $expr: { $ne: ['$updatedAt', '$createdAt'] }
+        }
+      },
+      { $sort: { updatedAt: -1 } },
+      { $limit: 20 },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'assignedTo',
+          foreignField: '_id',
+          as: 'assignedToUser'
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'assignedBy',
+          foreignField: '_id',
+          as: 'assignedByUser'
+        }
+      },
+      {
+        $addFields: {
+          assignedTo: { $arrayElemAt: ['$assignedToUser', 0] },
+          assignedBy: { $arrayElemAt: ['$assignedByUser', 0] }
+        }
+      },
+      {
+        $project: {
+          assignedToUser: 0,
+          assignedByUser: 0
+        }
+      }
+    ]);
+
+    updatedTasks.forEach(task => {
       let action = 'updated';
-      if (task.status === 'completed') action = 'completed';
-      else if (task.status === 'pending') action = 'created';
-      else if (task.status === 'delayed') action = 'delayed';
+      let type = 'task_updated';
 
-      const assignerName = task.assignedBy ? task.assignedBy.name : 'Someone';
+      if (task.status === 'completed') {
+        action = 'completed';
+        type = 'task_completed';
+      } else if (task.status === 'delayed') {
+        action = 'marked as delayed';
+        type = 'task_delayed';
+      } else if (task.status === 'in-progress') {
+        action = 'started working on';
+        type = 'task_updated';
+      }
 
-      return {
+      const actor = task.assignedTo?._id.toString() === userId.toString()
+        ? 'You'
+        : task.assignedTo?.name || 'Someone';
+
+      recentActivity.push({
         type,
-        description: `${assignerName} ${action} task: ${task.title}`,
+        description: `${actor} ${action} task: ${task.title}`,
         task: task.title,
         status: task.status,
         progress: task.progress,
         timestamp: task.updatedAt
-      };
+      });
     });
 
-    const userActivities = recentUsers.map(user => ({
-      type: 'user_added',
-      description: `You added user: ${user.name}`,
-      task: user.name,
-      status: 'active',
-      progress: 0,
-      timestamp: user.createdAt
-    }));
+    // 4. Subtasks assigned to the user - FIXED for days.subTasks structure
+    const tasksWithSubtasks = await Task.find({
+      'days.subTasks.assignedTo': userId
+    })
+      .populate('assignedBy', 'name')
+      .sort({ 'createdAt': -1 })
+      .limit(20)
+      .lean();
 
-    // Merge and sort
-    const recentActivity = [...taskActivities, ...userActivities]
-      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-      .slice(0, 10);
+    tasksWithSubtasks.forEach(task => {
+      // Get all subtasks assigned to this user from all days
+      const userSubtasks = (task.days || []).flatMap(day => 
+        (day.subTasks || []).filter(
+          st => st.assignedTo?.toString() === userId.toString()
+        )
+      );
 
-    if (recentActivity.length === 0) {
-      console.log('No recent activity found (tasks or users).');
+      userSubtasks.forEach(subtask => {
+        const assignerName = task.assignedBy?.name || 'Someone';
+        recentActivity.push({
+          type: 'subtask_assigned',
+          description: `${assignerName} assigned subtask: ${subtask.description} (in ${task.title})`,
+          task: `${task.title} - ${subtask.description}`,
+          status: subtask.status,
+          progress: 0,
+          timestamp: subtask.createdAt || task.createdAt
+        });
+      });
+    });
+
+    // 5. Subtask updates by the user - FIXED for days.subTasks structure
+    const updatedSubtasks = await Task.find({
+      'days.subTasks.assignedTo': userId,
+      'days.subTasks.updatedAt': { $exists: true }
+    })
+      .sort({ 'updatedAt': -1 })
+      .limit(20)
+      .lean();
+
+    updatedSubtasks.forEach(task => {
+      // Find subtasks assigned to this user that have been updated
+      const userSubtasks = (task.days || []).flatMap(day => 
+        (day.subTasks || []).filter(
+          st => st.assignedTo?.toString() === userId.toString() && st.updatedAt
+        )
+      );
+
+      userSubtasks.forEach(subtask => {
+        let action = 'updated';
+        let type = 'subtask_updated';
+
+        if (subtask.status === 'completed') {
+          action = 'completed';
+          type = 'subtask_completed';
+        } else if (subtask.status === 'delayed') {
+          action = 'marked as delayed';
+          type = 'subtask_delayed';
+        }
+
+        recentActivity.push({
+          type,
+          description: `You ${action} subtask: ${subtask.description} (in ${task.title})`,
+          task: `${task.title} - ${subtask.description}`,
+          status: subtask.status,
+          progress: 0,
+          timestamp: subtask.updatedAt || subtask.createdAt || task.updatedAt
+        });
+      });
+    });
+
+    // 6. Users added by this user (if they have permission)
+    if (['admin', 'manager'].includes(userRole)) {
+      const usersAddedByUser = await User.find({
+        createdBy: userId
+      })
+        .sort({ createdAt: -1 })
+        .limit(15)
+        .lean();
+
+      usersAddedByUser.forEach(user => {
+        recentActivity.push({
+          type: 'user_added',
+          description: `You added user: ${user.name} (${user.email})`,
+          task: user.name,
+          status: user.isActive ? 'active' : 'inactive',
+          progress: 0,
+          timestamp: user.createdAt
+        });
+      });
     }
 
+    // 7. Users assigned to this manager
+    const managedUsers = await User.find({
+      manager: userId
+    })
+      .sort({ createdAt: -1 })
+      .limit(15)
+      .lean();
 
+    managedUsers.forEach(user => {
+      recentActivity.push({
+        type: 'user_assigned',
+        description: `${user.name} was assigned to your team`,
+        task: user.name,
+        status: user.isActive ? 'active' : 'inactive',
+        progress: 0,
+        timestamp: user.createdAt
+      });
+    });
+
+    // Sort all activities by timestamp and limit to 50 most recent
+    const sortedActivity = recentActivity
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, 50);
+
+    // ===============================
+    // CHART DATA (LAST 7 DAYS)
+    // ===============================
+    const days = [];
+    const today = new Date();
+
+    // Initialize last 7 days with 0 counts
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      days.push({
+        date: date,
+        name: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        dateStr: date.toISOString().split('T')[0],
+        completed: 0,
+        pending: 0,
+        inProgress: 0,
+        delayed: 0
+      });
+    }
+
+    const last7DaysDate = new Date(today);
+    last7DaysDate.setDate(last7DaysDate.getDate() - 7);
+
+    // Fetch tasks updated in the last 7 days
+    const weeklyStats = await Task.find({
+      $or: [
+        { assignedTo: userId },
+        { assignedBy: userId },
+        { 'days.subTasks.assignedTo': userId }
+      ],
+      updatedAt: { $gte: last7DaysDate }
+    }).select('status updatedAt');
+
+    // Populate counts
+    weeklyStats.forEach(task => {
+      const taskDate = task.updatedAt.toISOString().split('T')[0];
+      const dayStat = days.find(d => d.dateStr === taskDate);
+
+      if (dayStat) {
+        if (task.status === 'completed') dayStat.completed++;
+        else if (task.status === 'pending') dayStat.pending++;
+        else if (task.status === 'in-progress') dayStat.inProgress++;
+        else if (task.status === 'delayed') dayStat.delayed++;
+      }
+    });
+
+    // Format for frontend
+    const chartData = days.map(({ name, completed, pending, inProgress, delayed }) => ({
+      name,
+      completed,
+      pending,
+      inProgress,
+      delayed
+    }));
 
     res.json({
       success: true,
@@ -274,7 +647,8 @@ export const getUserDashboard = async (req, res) => {
         taskCounts,
         productivity,
         upcomingDeadlines,
-        recentActivity,
+        recentActivity: sortedActivity,
+        chartData,
         userTasks: userTasks.slice(0, 5)
       }
     });
@@ -467,14 +841,6 @@ export const getAdminDashboard = async (req, res) => {
 
     // Get recent system activity
     const recentSystemActivity = await Task.aggregate([
-      {
-        $match: {
-          $or: [
-            { assignedTo: new mongoose.Types.ObjectId(req.user._id) },
-            { assignedBy: new mongoose.Types.ObjectId(req.user._id) }
-          ]
-        }
-      },
       { $sort: { updatedAt: -1 } },
       { $limit: 15 },
       {
@@ -513,11 +879,6 @@ export const getAdminDashboard = async (req, res) => {
       }
     ]);
 
-    // Add sample activities if no recent activity
-    if (recentSystemActivity.length === 0) {
-      recentSystemActivity.push(...generateSampleActivities());
-    }
-
     // Get monthly growth data
     const monthlyGrowth = await getMonthlyGrowthData();
 
@@ -535,7 +896,7 @@ export const getAdminDashboard = async (req, res) => {
           activeUsers: totalUsers,
           activeCompanies: totalCompanies,
           activeTasks: totalTasks,
-          taskCompletionRate: tasksByStatus.find(s => s._id === 'completed')?.count || 0 / totalTasks * 100 || 0
+          taskCompletionRate: (tasksByStatus.find(s => s._id === 'completed')?.count || 0) / totalTasks * 100 || 0
         }
       }
     });
@@ -550,130 +911,7 @@ export const getAdminDashboard = async (req, res) => {
   }
 };
 
-// Helper functions
-
-/**
- * Get recent activities for dashboard
- */
-async function getRecentActivities(userId, userRole, query) {
-  try {
-    const recentTasks = await Task.find(query)
-      .populate('assignedTo', 'name')
-      .populate('assignedBy', 'name')
-      .sort({ updatedAt: -1 })
-      .limit(10);
-
-    const activities = recentTasks.map(task => ({
-      id: task._id,
-      type: getActivityType(task),
-      user: task.assignedBy?.name || 'System',
-      task: task.title,
-      target: task.assignedTo?.name,
-      description: getActivityDescription(task),
-      timestamp: task.updatedAt
-    }));
-
-    // Add user activities if available
-    const recentUsers = await User.find({ isActive: true })
-      .sort({ createdAt: -1 })
-      .limit(5);
-
-    const userActivities = recentUsers.map(user => ({
-      id: user._id,
-      type: 'user_added',
-      user: 'Admin',
-      target: user.name,
-      timestamp: user.createdAt
-    }));
-
-    return [...activities, ...userActivities].slice(0, 10);
-
-  } catch (error) {
-    console.error('Error fetching activities:', error);
-    return generateSampleActivities();
-  }
-}
-
-/**
- * Get chart data for dashboard
- */
-async function getChartData(query) {
-  try {
-    const today = new Date();
-    const last7Days = new Date(today);
-    last7Days.setDate(last7Days.getDate() - 7);
-
-    const chartData = await Task.aggregate([
-      {
-        $match: {
-          ...query,
-          updatedAt: { $gte: last7Days }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            $dateToString: { format: "%Y-%m-%d", date: "$updatedAt" }
-          },
-          completed: {
-            $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] }
-          },
-          pending: {
-            $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] }
-          },
-          inProgress: {
-            $sum: { $cond: [{ $eq: ["$status", "in-progress"] }, 1, 0] }
-          },
-          delayed: {
-            $sum: { $cond: [{ $eq: ["$status", "delayed"] }, 1, 0] }
-          }
-        }
-      },
-      { $sort: { _id: 1 } },
-      {
-        $project: {
-          name: "$_id",
-          completed: 1,
-          pending: 1,
-          inProgress: 1,
-          delayed: 1,
-          _id: 0
-        }
-      }
-    ]);
-
-    // Fill in missing days
-    const filledData = [];
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(date.getDate() - i);
-      const dateStr = date.toISOString().split('T')[0];
-
-      const existingData = chartData.find(d => d.name === dateStr);
-      if (existingData) {
-        filledData.push(existingData);
-      } else {
-        filledData.push({
-          name: dateStr,
-          completed: 0,
-          pending: 0,
-          inProgress: 0,
-          delayed: 0
-        });
-      }
-    }
-
-    return filledData;
-
-  } catch (error) {
-    console.error('Error fetching chart data:', error);
-    return generateSampleChartData();
-  }
-}
-
-/**
- * Get monthly growth data
- */
+// Helper function
 async function getMonthlyGrowthData() {
   const currentMonth = new Date().getMonth();
   const currentYear = new Date().getFullYear();
@@ -706,99 +944,6 @@ async function getMonthlyGrowthData() {
     month: `${item._id.year}-${String(item._id.month).padStart(2, '0')}`,
     tasks: item.count,
     completed: item.completed,
-    growth: 0 // You can calculate growth percentage if needed
+    growth: 0
   }));
-}
-
-/**
- * Generate sample activities for testing
- */
-function generateSampleActivities() {
-  const now = new Date();
-  return [
-    {
-      id: 1,
-      type: 'task_completed',
-      user: 'John Doe',
-      task: 'Project Setup',
-      timestamp: new Date(now.getTime() - 3600000).toISOString()
-    },
-    {
-      id: 2,
-      type: 'user_added',
-      user: 'Admin',
-      target: 'Jane Smith',
-      timestamp: new Date(now.getTime() - 7200000).toISOString()
-    },
-    {
-      id: 3,
-      type: 'task_created',
-      user: 'Manager',
-      task: 'Dashboard Implementation',
-      timestamp: new Date(now.getTime() - 10800000).toISOString()
-    },
-    {
-      id: 4,
-      type: 'task_delayed',
-      task: 'API Integration',
-      timestamp: new Date(now.getTime() - 14400000).toISOString()
-    }
-  ];
-}
-
-/**
- * Generate sample chart data
- */
-function generateSampleChartData() {
-  const days = [];
-  const today = new Date();
-
-  for (let i = 6; i >= 0; i--) {
-    const date = new Date(today);
-    date.setDate(date.getDate() - i);
-    const dateStr = date.toLocaleDateString('en-US', { weekday: 'short' });
-
-    days.push({
-      name: dateStr,
-      completed: Math.floor(Math.random() * 20) + 5,
-      pending: Math.floor(Math.random() * 15) + 3,
-      inProgress: Math.floor(Math.random() * 10) + 2,
-      delayed: Math.floor(Math.random() * 5) + 1
-    });
-  }
-
-  return days;
-}
-
-/**
- * Get activity type based on task status
- */
-function getActivityType(task) {
-  switch (task.status) {
-    case 'completed':
-      return 'task_completed';
-    case 'pending':
-      return 'task_created';
-    case 'in-progress':
-      return 'task_updated';
-    case 'delayed':
-      return 'task_delayed';
-    default:
-      return 'task_updated';
-  }
-}
-
-/**
- * Generate activity description
- */
-function getActivityDescription(task) {
-  const statusMap = {
-    'completed': 'completed',
-    'pending': 'created',
-    'in-progress': 'updated',
-    'delayed': 'delayed'
-  };
-
-  const action = statusMap[task.status] || 'updated';
-  return `${task.assignedBy?.name || 'Someone'} ${action} task "${task.title}"`;
 }
