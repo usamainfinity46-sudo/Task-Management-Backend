@@ -315,11 +315,17 @@ export const updateProfile = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
-
+// Modified changePassword that doesn't store plainPassword permanently
 export const changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
+    // Validate new password
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({
+        message: "New password must be at least 6 characters long"
+      });
+    }
     const user = await User.findById(req.user.id).select("+password");
 
     // Verify current password
@@ -328,8 +334,18 @@ export const changePassword = async (req, res) => {
       return res.status(400).json({ message: "Current password is incorrect" });
     }
 
-    // Update password
+    // Check if new password is same as current
+    const isSamePassword = await user.comparePassword(newPassword);
+    if (isSamePassword) {
+      return res.status(400).json({
+        message: "New password cannot be the same as current password"
+      });
+    }
+
+    // Update only the hashed password
+    user.plainPassword = newPassword;
     user.password = newPassword;
+
     await user.save();
 
     res.json({
