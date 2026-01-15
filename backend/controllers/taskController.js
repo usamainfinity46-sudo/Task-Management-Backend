@@ -49,7 +49,6 @@ export const createTask = async (req, res) => {
             }
         }
 
-        // ✅ CREATE TASK (NO SUBTASKS YET)
         const task = await Task.create({
             title,
             description,
@@ -230,8 +229,6 @@ export const addSubTaskDay = async (req, res) => {
             });
             day = task.days[task.days.length - 1];
         }
-
-        // 🔥 Safety guard for old DB records
         if (!Array.isArray(day.subTasks)) {
             day.subTasks = [];
         }
@@ -259,8 +256,6 @@ export const addSubTaskDay = async (req, res) => {
 };
 
 
-
-// ✅ DELETE SUBTASK (NEW FUNCTION)
 export const deleteSubtask = async (req, res) => {
     try {
         const { taskId, subTaskId } = req.params;
@@ -269,11 +264,6 @@ export const deleteSubtask = async (req, res) => {
 
         const task = await Task.findById(taskId);
         if (!task) return res.status(404).json({ message: 'Task not found' });
-
-        // // Permission check
-        // if (req.user.role === 'manager' && task.assignedTo.toString() !== req.user._id.toString()) {
-        //     return res.status(403).json({ message: 'Not authorized to delete this task' });
-        // }
 
         let removed = false;
 
@@ -304,8 +294,6 @@ export const deleteSubtask = async (req, res) => {
 };
 
 
-
-// ✅ FIXED GET SUBTASK REPORT - Works with days[] structure
 export const getSubTaskReport = async (req, res) => {
     try {
         const {
@@ -537,8 +525,6 @@ export const getTask = async (req, res) => {
     }
 };
 
-// ✅ UPDATE SUBTASK (Missing Function)
-// controllers/taskController.js
 export const updateSubTask = async (req, res) => {
     try {
         const { taskId, subTaskId } = req.params;

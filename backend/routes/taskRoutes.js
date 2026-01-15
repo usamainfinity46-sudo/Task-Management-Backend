@@ -47,6 +47,7 @@ router.delete('/:id',  authorize(['admin', 'manager']), deleteTask);
 
 router.post('/:taskId/subtaskDays', authorize(['admin', 'staff']), protect, addSubTaskDay);
 // router.post('/:taskId/subtasks', protect, addSubTask);
+
 router.put('/:taskId/subtasks/:subTaskId', protect , updateSubTask);
 router.delete('/:taskId/subtasks/:subTaskId', protect, deleteSubtask);
 
