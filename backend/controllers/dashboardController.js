@@ -56,7 +56,6 @@ export const getDashboardStats = async (req, res) => {
       ...(userRole === 'admin' ? {} : { assignedTo: userId }),
       status: 'delayed'
     });
-
     // ===============================
     // SUBTASK COUNTS (FOR TASKS ASSIGNED TO USER)
     // ===============================
