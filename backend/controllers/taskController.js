@@ -21,11 +21,6 @@ const updateTaskProgressAndStatus = (task) => {
 
     // Check if we have subtasks for the final day (or if start=end)
     const hasFinalDay = task.days.some(d => isSameDay(new Date(d.date), new Date(task.endDate)));
-    // OR if the task is just a one-day task, that single day IS the final day.
-    // However, the `isSameDay` check above covers both cases ideally, as long as `d.date` matches `endDate`.
-    // Wait, what if the task spans Jan 16-23, and we only have subtasks for Jan 16?
-    // progress might be 100% for that day, but we shouldn't complete the whole task.
-    // So we require `hasFinalDay` to be true.
 
     if (task.progress === 100 && hasFinalDay) {
         task.status = 'completed';
@@ -36,7 +31,6 @@ const updateTaskProgressAndStatus = (task) => {
     }
 };
 
-// ✅ CREATE TASK WITH DETAILED SUBTASKS
 export const createTask = async (req, res) => {
     try {
         const errors = validationResult(req);
